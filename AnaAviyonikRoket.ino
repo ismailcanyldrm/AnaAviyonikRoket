@@ -5,9 +5,21 @@
 #include <BME280SpiSw.h>
 #include <EnvironmentCalculations.h>
 
+#include <MPU9250_asukiaaa.h>
+#include <movingAvg.h> 
+#include <Wire.h>
+#include <SPI.h>
+#include <SoftwareSerial.h>
+#include <TinyGPS.h>
+#include <Adafruit_Sensor.h>
+
+
+
+#define SEALEVELPRESSURE_HPA (1013.25)
 #if !defined(ARDUINO_ARCH_RP2040)
   #error For RP2040 only
 #endif
+
 #if defined(ARDUINO_ARCH_MBED)
   
   #define PIN_SD_MOSI       PIN_SPI_MOSI
@@ -28,69 +40,79 @@
 
 #include <SPI.h>
 #include <RP2040_SD.h>
-#include <MPU9250_asukiaaa.h>
-#include <BME280I2C.h>
-#include <movingAvg.h>
-#include <Wire.h>
-#include <SoftwareSerial.h>
-#include <TinyGPS.h>
-#include <MovingAverageFilter.h>
 
-MovingAverageFilter movingAverageFilter(20);
+MPU9250 mpu9250;
+SoftwareSerial mpu9250(6,7);
 
-#define SERIAL_BAUD 115200
+File sdkart;
 
-BME280I2C bme; 
-#ifdef _ESP32_HAL_I2C_H_
-#define SDA_PIN 4
-#define SCL_PIN 5
-#endif
+MPU9250 IMU(Wire,0x68);
+int status;
+int RXPin = 10;
+int TXPin = 11;
 
 TinyGPS gps;
-SoftwareSerial serialgps(8,9);
-
-MPU9250_asukiaaa mySensor;
-float aX, aY, aZ, aSqrt, gX, gY, gZ, mDirection, mX, mY, mZ;
+SoftwareSerial serialgps(10,11);
 int year;
 byte month, day, hour, minute, second, hundredths;
 unsigned long chars;
 unsigned short sentences, failed_checksum;
-File sdkart;
+int GPSBaud = 9600;
+  
 
-float b[3] = {0.0,0.0,0.0};
-float a[3] = {0.0,0.0,0.0};
-float g[3] = {0.0,0.0,0.0};
-float angle[3] = {0.0,0.0,0.0};
+movingAvg avgmpu9250x(1);  
+movingAvg avgmpu9250z(2); 
+movingAvg avgmpu9250y(3);
 
-int gpsint[3] = {0,0,0}; 
-double gpsdouble[4] = {0.0,0.0,0.0,0.0}; 
-float gpsfloat[5] = {0.0,0.0,0.0,0.0,0.0}; 
+movingAvg avgmpu9250gyrox(1);  
+movingAvg avgmpu9250gyroz(2); 
+movingAvg avgmpu9250gyroy(3);
+
+movingAvg avgmpu9250acix(1);  
+movingAvg avgmpu9250aciz(2); 
+movingAvg avgmpu9250aciy(3);
+
+movingAvg avgbmp180P(1);  
+movingAvg avgbmp180Y(2); 
 
 void setup() {
-  Serial.begin(9600);
-  while(!Serial);
-  Serial.println("started");
-      serialgps.begin(9600);
 
-        Serial.println("");
-        Serial.println(" ...Uydu Bağlantısı Bekleniyor... ");
-        Serial.println("");
-        
-#ifdef MPU9250_I2C_ADR 0x68 // For ESP32
-  Wire.begin(SDA_PIN, SCL_PIN);
-  mySensor.setWire(&Wire);
-#endif
+   Wire_00.begin();
+   Wire_00.setClock(100000);
+  Serial.begin(115200);
+  while(!Serial) {}
 
-  mySensor.beginAccel();
-  mySensor.beginGyro();
-  mySensor.beginMag();
+  status = IMU.begin();
+  if (status < 0) {
+    Serial.println("IMU initialization unsuccessful");
+    Serial.println("Check IMU wiring or try cycling power");
+    Serial.print("Status: ");
+    Serial.println(status);
+    while(1) {}
+  }
+ 
+     while ( !Serial ) delay(100);   
+  Serial.println(F("BMP280 test"));
+  unsigned status;
 
-  // You can set your own offset for mag values
-  // mySensor.magXOffset = -50;
-  // mySensor.magYOffset = -55;
-  // mySensor.magZOffset = -10;
-
-  #if defined(ARDUINO_ARCH_MBED)
+  if (!bme.begin(0x76)) {
+    Serial.println("Could not find a valid BME280 sensor, check wiring!");
+    while (1);
+  }
+        avgmpu9250x.begin();  
+    avgmpu9250y.begin(); 
+    avgmpu9250z.begin(); 
+        avgmpu9250gyrox.begin();  
+    avgmpu9250gyroy.begin(); 
+    avgmpu9250gyroz.begin();  
+        avgmpu9250acix.begin();  
+    avgmpu9250aciy.begin(); 
+    avgmpu9250aciz.begin();       
+    serialgps.begin(9600);
+    Serial.println("");
+    Serial.println(" ...Uydu Bağlantısı Bekleniyor... ");
+    Serial.println("");  
+      #if defined(ARDUINO_ARCH_MBED)
   Serial.print("Starting SD Card ReadWrite on MBED ");
 #else
   Serial.print("Starting SD Card ReadWrite on ");
@@ -112,173 +134,133 @@ void setup() {
   
   Serial.println("Initialization done.");
 
+
+  
 }
 
-void loop() {
-  Serial.println("MPU9250 VERİLERİ");
-   mpu_();
-   Serial.println("BME280 VERİLERİ");
-   printBME280Data(&Serial);
-   Serial.println("GPS VERİLERİ");
-   GPSS();
+void loop() 
+{
+  Serial.println("************AÇI VERİLERİ************");
+  aci();
+  Serial.println("************İVME VERİLERİ************");
+  ivme();
+  Serial.println("************AÇISAL HIZ VERİLERİ************");
+  acisalhiz();
+  Serial.println("************SICAKLIK VERİSİ************");
+  Serial.print("Sıcaklık :");
+  Serial.print(IMU.getTemperature_C(),2);Serial.println("°C");
+  Serial.println("************BASINÇ VERİSİ************");
+  Basinc();
+    Serial.println("************YÜKSEKLİK VERİSİ************");
+  Yukseklik();
+  Serial.println("************GPS VERİLERİ************");
+  GPSS();
+ 
+  delay(250);
+} 
+void sd_card()
+{
+  int a = 1;
+  int b = 2;
+  Serial.print("Basınç değeri : ");Serial.println(b);
+ Serial.print(" , ");
+ Serial.print("Yükseklik değeri : ");Serial.println(a);
 
-
- sdkart = SD.open("AnaAviyonik.txt",FILE_WRITE);
+ sdkart = SD.open("dataAaAa.txt",FILE_WRITE);
 
  if(sdkart)
  {
-  sdkart.println("BME 280 VERİLERİ");
-  sdkart.print("Basınç değeri: ");sdkart.print(b[0]);
+  sdkart.print("Basınç değeri: ");sdkart.print(double(b));
   sdkart.print(" , ");
-  sdkart.print("Nem değeri: ");sdkart.print(b[1]);
-  sdkart.print(" , ");
-  sdkart.print("Sıcaklık değeri: ");sdkart.print(b[2]);
-  sdkart.println(" ");
-  sdkart.println("İVME VERİLERİ");
-  sdkart.print("İvmeX: ");sdkart.print(a[0]);
-  sdkart.print(" , ");
-  sdkart.print("İvmeY: ");sdkart.print(a[1]);
-  sdkart.print(" , ");
-  sdkart.print("İvmeZ: ");sdkart.print(a[2]);
-  sdkart.println(" ");
-  sdkart.println("GYRO VERİLERİ");
-  sdkart.print("GyroX: ");sdkart.print(g[0]);
-  sdkart.print(" , ");
-  sdkart.print("GyroY: ");sdkart.print(g[1]);
-  sdkart.print(" , ");
-  sdkart.print("GyroZ: ");sdkart.print(g[2]);
-  sdkart.println(" ");
-  sdkart.println("GPS VERİLERİ");
-  sdkart.print("Enlem: ");sdkart.print(gpsfloat[3]);
-  sdkart.print(" , ");
-  sdkart.print("Boylam: ");sdkart.print(gpsfloat[4]);
-  sdkart.print(" , ");
-  sdkart.print("Gün: ");sdkart.print(gpsint[0]);
-  sdkart.print(" ");
-  sdkart.print("Ay: ");sdkart.print(gpsint[1]);
-  sdkart.print(" , ");
-  sdkart.print("Yıl: ");sdkart.print(gpsint[2]);
-  sdkart.print(" , ");
-  sdkart.print("Saat: ");sdkart.print(gpsdouble[0]);
-  sdkart.print(" , ");
-  sdkart.print("Dakika: ");sdkart.print(gpsdouble[1]);
-  sdkart.print(" , ");
-  sdkart.print("Saniye: ");sdkart.print(gpsdouble[2]);
-  sdkart.print(" , ");
-  sdkart.print("Salise: ");sdkart.print(gpsdouble[3]);
-  sdkart.print(" ");
-  sdkart.print("Yükseklik: ");sdkart.print(gpsfloat[0]);
-  sdkart.print(" , ");
-  sdkart.print("Doğrusal Hız: ");sdkart.print(gpsfloat[2]);
-  sdkart.print(" , ");
-  sdkart.print("Açı: ");sdkart.print(gpsfloat[1]);
-  sdkart.println(" ");
-  
+  sdkart.print("Yükseklik değeri: ");sdkart.println(double(a));
   sdkart.close();  
  }
  else
  {
-  Serial.println("AnaAviyonik.txt açılamadı.");
+  Serial.println("dataAaAa.txt açılamadı.");
  }
-   
-  delay(500);
 }
-void printBME280Data
-(
-   Stream* client
-)
+void ivme()
 {
-   float temp(NAN), hum(NAN), pres(NAN);
-
-   BME280::TempUnit tempUnit(BME280::TempUnit_Celsius);
-   BME280::PresUnit presUnit(BME280::PresUnit_Pa);
-
-   bme.read(pres, temp, hum, tempUnit, presUnit);
-   
-    float avgP = movingAverageFilter.process(pres);
-    float avgN = movingAverageFilter.process(hum);
-    float avgT = movingAverageFilter.process(temp);
-
-   client->print("Temp: ");
-   client->print(avgT);
-   client->print("°"+ String(tempUnit == BME280::TempUnit_Celsius ? 'C' :'F'));
-   client->print("\t\tHumidity: ");
-   client->print(avgN);
-   client->print("% RH");
-   client->print("\t\tPressure: ");
-   client->print(avgP);
-   client->println("Pa");
-
-   b[0] = avgT;
-   b[1] = avgN;
-   b[2] = avgP;
-  
-  
-   
-}
-void mpu_()
-{
-  uint8_t sensorId;
-  int result;
-
-  result = mySensor.readId(&sensorId);
-  if (result == 0) {
-    Serial.println("sensorId: " + String(sensorId));
-  } else {
-    Serial.println("Cannot read sensorId " + String(result));
-  }
-
-  result = mySensor.accelUpdate();
-  if (result == 0) {
-
-    float avgx = movingAverageFilter.process(mySensor.accelX());
-    float avgy = movingAverageFilter.process(mySensor.accelY());
-    float avgz = movingAverageFilter.process(mySensor.accelZ());
+  IMU.readSensor();
+      float ax[3]={0.0,0.0,0.0};
+           ax[0] = IMU.getAccelX_mss();    
+    float avgx = avgmpu9250x.reading(ax[0]); 
+          ax[1] = IMU.getAccelY_mss();    
+    float avgy = avgmpu9250y.reading(ax[1]); 
+          ax[2] = IMU.getAccelZ_mss();    
+    float avgz = avgmpu9250z.reading(ax[2]); 
+      
             Serial.print("Avg X İvmesi : ");
-    Serial.print(avgx);Serial.println("(m/s²)"); 
+    Serial.print(avgx,6);Serial.println("(m/s²)"); 
         Serial.print("Avg Y İvmesi : ");
-    Serial.print(avgy);Serial.println("(m/s²)");    
+    Serial.print(avgy,6);Serial.println("(m/s²)");    
         Serial.print("Avg Z İvmesi : ");
-    Serial.print(avgz);Serial.println("(m/s²)");  
-
-    a[0] = avgx;
-    a[1] = avgy;
-    a[2] = avgz;
-
-  } else {
-    Serial.println("Cannod read accel values " + String(result));
-  }
-
-  result = mySensor.gyroUpdate();
-  if (result == 0) {
-          
-   
-    float avgHx = movingAverageFilter.process(mySensor.gyroX());
-    float avgHy = movingAverageFilter.process(mySensor.gyroY());
-    float avgHz = movingAverageFilter.process(mySensor.gyroX());
-    
+    Serial.print(avgz,6);Serial.println("(m/s²)");  
+}
+void acisalhiz()
+{
+    IMU.readSensor();
+      float aH[3]={0.0,0.0,0.0};
+           aH[0] = IMU.getGyroX_rads();
+    float avgHx = avgmpu9250gyrox.reading(aH[0]); 
+          aH[1] = IMU.getGyroY_rads();    
+    float avgHy = avgmpu9250gyroy.reading(aH[1]); 
+          aH[2] = IMU.getGyroZ_rads();    
+    float avgHz = avgmpu9250gyroz.reading(aH[2]); 
+      
             Serial.print("Avg X Açısal Hızı : ");
     Serial.print(avgHx,2);Serial.println("(rad/sn)"); 
         Serial.print("Avg Y Açısal Hızı : ");
     Serial.print(avgHy,2);Serial.println("(rad/sn)");   
         Serial.print("Avg Z Açısal Hızı : ");
     Serial.print(avgHz,2);Serial.println("(rad/sn)"); 
+}
+void aci()
+{
+  IMU.readSensor();
+      float aA[3]={0.0,0.0,0.0};
+      float Anglex = degrees (IMU.getGyroX_rads());
+           aA[0] = Anglex;
+    float avgAx = avgmpu9250acix.reading(aA[0]); 
+     float Angley = degrees (IMU.getGyroY_rads());
+          aA[1] = Angley;    
+    float avgAy = avgmpu9250aciy.reading(aA[1]); 
+     float Anglez = degrees (IMU.getGyroZ_rads());
+          aA[2] = Anglez;    
+    float avgAz = avgmpu9250aciz.reading(aA[2]); 
+      
+            Serial.print("Avg X Açısı : ");
+    Serial.print(avgAx,2);Serial.println("°"); 
+        Serial.print("Avg Y Açısı : ");
+    Serial.print(avgAy,2);Serial.println("°"); 
+        Serial.print("Avg Z Açısı : ");
+    Serial.print(avgAz,2);Serial.println("°");
+}
 
-    g[0] = avgHx;
-    g[1] = avgHy;
-    g[2] = avgHz;
-    
-  } else {
-    Serial.println("Cannot read gyro values " + String(result));
+
+   void  Basinc ()
+   {
+            float aP[]={0.0};
+           aP[0] = (bme.readPressure());
+    float avgPx =avgbmp180P.reading(aP[0]); 
+           Serial.print("Avg Basınç : ");
+    Serial.print(avgPx,2);Serial.println(" Pa ");
+ }
+
+    void Yukseklik ()
+    {
+              float aY[]={0.0};
+           aY[0] = (bme.readAltitude(SEALEVELPRESSURE_HPA));
+    float avgYx =avgbmp180Y.reading(aY[0]); 
+           Serial.print("Avg Yükseklik : ");
+    Serial.print(avgYx,2);Serial.println(" m ");
+
   }
 
-  Serial.println("at " + String(millis()) + "ms");
-  Serial.println(""); // Add an empty line
-    
-}
 void GPSS()
 {
-   while(serialgps.available())
+      while(serialgps.available())
     {
         int c = serialgps.read();
         if(gps.encode(c))
@@ -318,19 +300,7 @@ void GPSS()
             Serial.print("Kardinal Pusula Yönü  ");
             Serial.println(gps.cardinal(gps.f_course()));
             // give it a try
-            gpsint[0] = day; 
-            gpsint[1] = month;
-            gpsint[2] = year;
-            gpsdouble[0] = hour+3;
-            gpsdouble[1] = minute;
-            gpsdouble[2] = second;
-            gpsdouble[3] = hundredths ;
-            gpsfloat[0] = (gps.f_altitude()/1229.0000);
-            gpsfloat[1] = gps.f_course();
-            gpsfloat[2] = gps.f_speed_kmph();
-            gpsfloat[3] = latitude;
-            gpsfloat[4] = longitude;
-            
+
             gps.stats(&chars, &sentences, &failed_checksum);
         }
     }
