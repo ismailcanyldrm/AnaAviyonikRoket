@@ -1,6 +1,7 @@
 #if !defined(ARDUINO_ARCH_RP2040)
   #error For RP2040 only
 #endif
+
 #if defined(ARDUINO_ARCH_MBED)
   
   #define PIN_SD_MOSI       PIN_SPI_MOSI
@@ -122,18 +123,22 @@ void setup() {
   Serial.println("Initialization done.");
 
 }
-void loop() {
 
+void loop() {
+  Serial.println("MPU9250 VERİLERİ");
+   mpu_();
    Serial.println("BME280 VERİLERİ");
    printBME280Data(&Serial);
-
-
+   Serial.println("GPS VERİLERİ");
+   GPSS();
+   Serial.println("ALEV SENSÖRÜ VERİLERİ");
+   alevSensoru();
 
  sdkart = SD.open("AnaAviyonik.txt",FILE_WRITE);
 
  if(sdkart)
  {
-  sdkart.println("BME 280 VERİLERİ");
+    sdkart.println("BME 280 VERİLERİ");
   sdkart.print("Basınç değeri: ");sdkart.print(b[0]);
   sdkart.print(" , ");
   sdkart.print("Nem değeri: ");sdkart.print(b[1]);
@@ -221,4 +226,123 @@ void printBME280Data
   
   
    
+}
+void mpu_()
+{
+  uint8_t sensorId;
+  int result;
+
+  result = mySensor.readId(&sensorId);
+  if (result == 0) {
+    Serial.println("sensorId: " + String(sensorId));
+  } else {
+    Serial.println("Cannot read sensorId " + String(result));
+  }
+
+  result = mySensor.accelUpdate();
+  if (result == 0) {
+
+    float avgx = movingAverageFilter.process(mySensor.accelX());
+    float avgy = movingAverageFilter.process(mySensor.accelY());
+    float avgz = movingAverageFilter.process(mySensor.accelZ());
+            Serial.print("Avg X İvmesi : ");
+    Serial.print(avgx);Serial.println("(m/s²)"); 
+        Serial.print("Avg Y İvmesi : ");
+    Serial.print(avgy);Serial.println("(m/s²)");    
+        Serial.print("Avg Z İvmesi : ");
+    Serial.print(avgz);Serial.println("(m/s²)");  
+
+    a[0] = avgx;
+    a[1] = avgy;
+    a[2] = avgz;
+
+  } else {
+    Serial.println("Cannod read accel values " + String(result));
+  }
+
+  result = mySensor.gyroUpdate();
+  if (result == 0) {
+          
+   
+    float avgHx = movingAverageFilter.process(mySensor.gyroX());
+    float avgHy = movingAverageFilter.process(mySensor.gyroY());
+    float avgHz = movingAverageFilter.process(mySensor.gyroX());
+    
+            Serial.print("Avg X Açısal Hızı : ");
+    Serial.print(avgHx,2);Serial.println("(rad/sn)"); 
+        Serial.print("Avg Y Açısal Hızı : ");
+    Serial.print(avgHy,2);Serial.println("(rad/sn)");   
+        Serial.print("Avg Z Açısal Hızı : ");
+    Serial.print(avgHz,2);Serial.println("(rad/sn)"); 
+
+    g[0] = avgHx;
+    g[1] = avgHy;
+    g[2] = avgHz;
+    
+  } else {
+    Serial.println("Cannot read gyro values " + String(result));
+  }
+
+  Serial.println("at " + String(millis()) + "ms");
+  Serial.println(""); // Add an empty line
+    
+}
+void GPSS()
+{
+   while(serialgps.available())
+    {
+        int c = serialgps.read();
+        if(gps.encode(c))
+        {
+            float latitude, longitude;
+            gps.f_get_position(&latitude, &longitude);
+            Serial.print("Enlem/Boylam: ");
+            Serial.print(latitude,5);
+            Serial.print(" / ");
+            Serial.println(longitude,5);
+            gps.crack_datetime(&year,&month,&day,&hour,&minute,&second,&hundredths);
+            Serial.print("Gün: ");
+            Serial.print(day, DEC);
+            Serial.print("Ay: ");
+            Serial.print(month, DEC);
+            Serial.print("Yıl: ");
+            Serial.print(year);
+            Serial.print(" Saat: ");
+            Serial.print((hour+3), DEC);
+            Serial.print(":");
+            Serial.print(minute, DEC);
+            Serial.print(":");
+            Serial.print(second, DEC);
+            Serial.print(".");
+            Serial.println(hundredths, DEC);
+            Serial.print("Yükseklik (meters): ");
+            Serial.println((gps.f_altitude()/1229.0000));
+            Serial.print("Rota (degrees): ");
+            Serial.println(gps.f_course());
+            Serial.print("Hız(kmph): ");
+            Serial.println(gps.f_speed_kmph());
+            Serial.print("Uydu Sayısı: ");
+            Serial.println(gps.satellites());
+            Serial.println();
+            
+            // adding cardinal course
+            Serial.print("Kardinal Pusula Yönü  ");
+            Serial.println(gps.cardinal(gps.f_course()));
+            // give it a try
+            gpsint[0] = day; 
+            gpsint[1] = month;
+            gpsint[2] = year;
+            gpsdouble[0] = hour+3;
+            gpsdouble[1] = minute;
+            gpsdouble[2] = second;
+            gpsdouble[3] = hundredths ;
+            gpsfloat[0] = (gps.f_altitude()/1229.0000);
+            gpsfloat[1] = gps.f_course();
+            gpsfloat[2] = gps.f_speed_kmph();
+            gpsfloat[3] = latitude;
+            gpsfloat[4] = longitude;
+            
+            gps.stats(&chars, &sentences, &failed_checksum);
+        }
+    }
 }
