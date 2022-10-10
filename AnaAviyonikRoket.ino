@@ -1,20 +1,4 @@
-/*#if !defined(ARDUINO_ARCH_RP2040)
-  #error For RP2040 only
-#endif
-#if defined(ARDUINO_ARCH_MBED)  
-  #define PIN_SD_MOSI       PIN_SPI_MOSI
-  #define PIN_SD_MISO       PIN_SPI_MISO
-  #define PIN_SD_SCK        PIN_SPI_SCK
-  #define PIN_SD_SS         PIN_SPI_SS
-#else
-  #define PIN_SD_MOSI       PIN_SPI0_MOSI
-  #define PIN_SD_MISO       PIN_SPI0_MISO
-  #define PIN_SD_SCK        PIN_SPI0_SCK
-  #define PIN_SD_SS         PIN_SPI0_SS 
-#endif
-#define _RP2040_SD_LOGLEVEL_       */
-int t1 = 14;
-int t2 = 3;
+
 #include <Wire.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME280.h>
@@ -22,72 +6,154 @@ int t2 = 3;
 #include <TinyGPS.h>
 #include <SoftwareSerial.h>
 #include <MovingAverageFilter.h>
-#include <SPI.h>
-//#include <RP2040_SD.h>
+#include "LoRa_E22.h"
 
-#define SEALEVELPRESSURE_HPA (877.20)
-float aX, aY, aZ, gX, gY, gZ, mX, mY, mZ;
+#define SEALEVELPRESSURE_HPA (906.56)
+float aX, aY, aZ, gX, gY, gZ, mX, mY, mZ,ts,ta;
+float iX, iY, iZ, ggX, ggY, ggZ, mmX, mmY, mmZ;
 static void smartdelay(unsigned long ms);
+float baseline,hp1,hp2,t ,e ,b,be,bes; 
+int t1 = 14;
+int t2 = 3;
+int tix , th, thf  = 0;
+float fark ,fark2= 0.0;
 
 Adafruit_BME280 bme;
 MPU9250_asukiaaa mySensor;
 TinyGPS gps;
-SoftwareSerial ss(11,12);
+SoftwareSerial ss(13,12);
 SoftwareSerial lora(1,0);
 //File myFile;
+LoRa_E22 E22(&lora);
 
-MovingAverageFilter mvg00(20);
-MovingAverageFilter mvg01(20);
-MovingAverageFilter mvg02(20);
-MovingAverageFilter mvg03(20);
 
-MovingAverageFilter mvg10(20);
-MovingAverageFilter mvg11(20);
-MovingAverageFilter mvg12(20);
+MovingAverageFilter mvg00(10);
+MovingAverageFilter mvg01(10);
+MovingAverageFilter mvg02(10);
+MovingAverageFilter mvg03(10);
 
-MovingAverageFilter mvg20(20);
-MovingAverageFilter mvg21(20);
-MovingAverageFilter mvg22(20);
+MovingAverageFilter mvg10(10);
+MovingAverageFilter mvg11(10);
+MovingAverageFilter mvg12(10);
 
-MovingAverageFilter mvg30(20);
-MovingAverageFilter mvg31(20);
-MovingAverageFilter mvg32(20);
+MovingAverageFilter mvg20(10);
+MovingAverageFilter mvg21(10);
+MovingAverageFilter mvg22(10);
+
+MovingAverageFilter mvg30(10);
+MovingAverageFilter mvg31(10);
+MovingAverageFilter mvg32(10);
+
+
+struct Signal {
+    byte Xgyro[4];
+    byte Ygyro[4];
+    byte Zgyro[4];
+    byte Xivme[4];
+    byte Yivme[4];
+    byte Zivme[4];
+    byte Xmage[4];
+    byte Ymage[4];
+    byte Zmage[4];
+    byte h[4];
+    byte p[4];
+    byte gpsE[4];
+    byte gpsB[4];
+    byte gpsH[4];
+    byte gpsS[4];
+
+} data;
 
 void setup() {
-  pinMode(25 , OUTPUT);
   pinMode(t1,OUTPUT);
   pinMode(t2, OUTPUT);
-  buzzer(10, 50);
-  
+  Wire.begin();
   Serial.begin(9600);
   bme.begin(0x76);
+  ss.begin(9600);
   mySensor.beginAccel();
   mySensor.beginGyro();
   mySensor.beginMag();
-  ss.begin(9600);
-  lora.begin(9600);
- // SD.begin(PIN_SD_SS);
-  #define fileName  "anah.txt"
+  E22.begin();
+
+
   
   
   // You can set your own offset for mag values
-  // mySensor.magXOffset = -50;
-  // mySensor.magYOffset = -55;
-  // mySensor.magZOffset = -10;
+  mySensor.magXOffset = +18;
+  mySensor.magYOffset = -29;
+  mySensor.magZOffset = -18;
 }
 
 void loop() 
 {
-  
   mpu9250();
   bmp280();
+  gpsSpeed();
+  gpsAltitude();
   gpsKonum();
-  gpsSatellite();
-  smartdelay(500);
+  smartdelay(250);
+
+    Yfark();
+    Xfark();
+    if (hp2 >= 1600 && fark >1.0 && iX<=-7 && fark2>1){
+      digitalWrite(t1, HIGH);
+      thf=1 ;
+      bmp280();
+      ts = hp2;
+    }
+    if(hp2 <= 610 && thf == 1 && fark > 1.0){
+      digitalWrite(t2, HIGH); 
+      thf =0;
+      bmp280();
+      ta = hp2;
+    }
+   
+  *(float*)(data.Xgyro) = ggX ;
+  *(float*)(data.Ygyro) = ggY ;
+  *(float*)(data.Zgyro) = ggZ ;
+
+  *(float*)(data.Xivme) = iX ;
+  *(float*)(data.Yivme) = iY ;
+  *(float*)(data.Zivme) = iZ ;
+
+  *(float*)(data.Xmage) = mmX ;
+  *(float*)(data.Ymage) = mmY ;
+  *(float*)(data.Zmage) = mmZ ;
+  
+  *(float*)(data.h) = hp2 ;
+  *(float*)(data.p) = hp1 ;
+  
+  *(float*)(data.gpsE) = e ;
+  *(float*)(data.gpsB) = b ;
+  *(float*)(data.gpsH) = be ;
+  *(float*)(data.gpsS) = bes ;
+
+
+  ResponseStatus rs = E22.sendFixedMessage(0, 62, 22, &data, sizeof(Signal));
+}
+void Yfark(){
+  
+  bmp280();
+  fark = hp2;
+  delay(250);
+  bmp280();
+  fark = fark - hp2;
+  
+}
+void Xfark(){
+  
+  bmp280();
+  fark2 = hp2;
+  delay(250);
+  bmp280();
+  fark2= fark2 - hp2;
+  
 }
 
 void bmp280()
 {
+    float hp[2]= {0.0,0.0};
     float T  = bme.readTemperature();
     float P = bme.readPressure() / 100.0F;
     float A = bme.readAltitude(SEALEVELPRESSURE_HPA);
@@ -97,22 +163,16 @@ void bmp280()
     float avgP = mvg01.process(P);
     float avgA = mvg02.process(A);
     float avgH = mvg03.process(H);
-    
-    Serial.println(avgT);
-    Serial.println(avgP);
-    Serial.println(avgA);
-    Serial.println(avgH);
-   /* myFile = SD.open(fileName, FILE_WRITE);
-    myFile.println(avgT);
-    myFile.println(avgP);
-    myFile.println(avgA);
-    myFile.println(avgH);
-    myFile.close();*/
 
+      hp[0]=avgP;
+      hp[1]=avgA;
+      hp1=hp[0];
+      hp2=hp[1];
 }
 
 void mpu9250()
 {
+    float ivme[3]= {0.0,0.0,0.0};
     float result;
   result = mySensor.accelUpdate();
     float aX = mySensor.accelX();
@@ -123,6 +183,17 @@ void mpu9250()
     float avgaY = mvg11.process(aY);
     float avgaZ = mvg12.process(aZ);
 
+      ivme[0]=avgaX*9.81;
+      ivme[1]=avgaY*9.81;
+      ivme[2]=avgaZ*9.81;
+
+      iX=ivme[0];
+      iY=ivme[1];
+      iZ=ivme[2];
+
+      
+      
+    float gyro[3]= {0.0,0.0,0.0};
   result = mySensor.gyroUpdate();
     float gX = mySensor.gyroX();
     float gY = mySensor.gyroY();
@@ -131,7 +202,15 @@ void mpu9250()
     float avggX = mvg20.process(gX);
     float avggY = mvg21.process(gY);
     float avggZ = mvg22.process(gZ);
+      gyro[0]=avggX;
+      gyro[1]=avggY;
+      gyro[2]=avggZ;
+      
+      ggX=gyro[0];
+      ggY=gyro[1];
+      ggZ=gyro[2];
 
+    float mage[3]= {0.0,0.0,0.0};
   result = mySensor.magUpdate();
     float mX = mySensor.magX();
     float mY = mySensor.magY();
@@ -140,70 +219,76 @@ void mpu9250()
     float avgmX = mvg30.process(mX);
     float avgmY = mvg31.process(mY);
     float avgmZ = mvg32.process(mZ);
-
-    Serial.println(aX);
-    Serial.println(aY);
-    Serial.println(aZ);
-    Serial.println(gX);
-    Serial.println(gY);
-    Serial.println(gZ);
-    Serial.println(mX);
-    Serial.println(mY);
-    Serial.println(mZ);
-  /*  myFile = SD.open(fileName, FILE_WRITE);
-    myFile.println(avgaX);
-    myFile.println(avgaY);
-    myFile.println(avgaZ);
-    myFile.println(avggX);
-    myFile.println(avggY);
-    myFile.println(avggZ);
-    myFile.println(avgmX);
-    myFile.println(avgmY);
-    myFile.println(avgmZ);
-    myFile.close();*/
+      mage[0]=avgmX;
+      mage[1]=avgmY;
+      mage[2]=avgmZ;
+      
+      mmX=mage[0];
+      mmY=mage[1];
+      mmZ=mage[2];
 }
 
 void gpsKonum() {
+  float gpsk[2]= {0.000000,0.000000};
   float flat, flon, invalid;
   gps.f_get_position(&flat, &flon);
   invalid = TinyGPS::GPS_INVALID_F_ANGLE;
   
-  if (flat == invalid || flon == invalid) {
-    lora.println(float(0),6);
-    lora.println(float(0),6);
+  if (flat == invalid && flon == invalid) {
+    gpsk[0]= 0.000000;
+    gpsk[1]= 0.000000;
+    e = gpsk[0];
+    b = gpsk[1];
   } else {
-    lora.println(float(flat),6);
-    lora.println(float(flon),6);
-  /*  myFile = SD.open(fileName, FILE_WRITE);
-    myFile.println(float(flat),6);
-    myFile.println(float(flon),6);
-    myFile.close();*/
+    gpsk[0]= float(flat),6;
+    gpsk[1]= float(flon),6;
+    e = gpsk[0];
+    b = gpsk[1]; 
   }
 }
-void gpsSatellite() {
-  float satellite, invalid;
-  satellite = gps.satellites();
-  invalid   = TinyGPS::GPS_INVALID_SATELLITES;
-  if (satellite == invalid) {
-    lora.println(float(0.00));
+void gpsAltitude(){
+  float gpsa[1]= {0.00};
+  float gpsAltitude , invalid;
+  gpsAltitude = gps.f_altitude() ;
+  invalid   = TinyGPS::GPS_INVALID_F_ALTITUDE;
+  if (gpsAltitude == invalid) {
+    gpsa[0]= 0.00;
+    be = gpsa[0];
   } else {
-    lora.println(satellite);
-/*    myFile = SD.open(fileName, FILE_WRITE);
-    myFile.println(satellite);
-    myFile.close();*/
-    
-  }
+    gpsa[0]= float(gpsAltitude);
+    be = gpsa[0];
+    }
+}
+void gpsSpeed(){
+  float gpss[1]= {0.00};
+  float gpsSpeed , invalid;
+  gpsSpeed = gps.f_speed_kmph() ;
+  invalid   = TinyGPS::GPS_INVALID_F_SPEED;
+  if (gpsSpeed == invalid) {
+    gpss[0]= 0.00;
+    bes = gpss[0];
+  } else {
+    gpss[0]= float(gpsSpeed);
+    bes = gpss[0];
+    }
 }
 static void smartdelay(unsigned long ms) {
   unsigned long start = millis();
   do {
     while (ss.available())
       gps.encode(ss.read());
-      
   } while (millis() - start < ms);
 }
-
 void buzzer(int tekrar, int sure) {
+  for (int i = 0; i < tekrar; i++) {
+    digitalWrite(9, HIGH);
+    delay(sure);
+    digitalWrite(9, LOW);
+    delay(sure);
+  }
+}
+
+void led(int tekrar, int sure) {
   for (int i = 0; i < tekrar; i++) {
     digitalWrite(25, HIGH);
     delay(sure);
